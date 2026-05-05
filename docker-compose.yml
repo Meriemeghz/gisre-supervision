@@ -9,11 +9,27 @@ services:
       POSTGRES_USER: admin
       POSTGRES_PASSWORD: admin
       POSTGRES_DB: gisre_db
+      POSTGRES_HOST_AUTH_METHOD: trust
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./database:/docker-entrypoint-initdb.d
+
+  simulator:
+    build: ./simulator
+    container_name: gisre_simulator
+    depends_on:
+      - postgres
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: gisre_db
+      DB_USER: admin
+      DB_PASSWORD: admin
+    volumes:
+      - ./simulator:/app
+    command: python main.py
 
 volumes:
   postgres_data:
