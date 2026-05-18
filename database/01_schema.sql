@@ -22,11 +22,14 @@ CREATE TABLE actors (
     actor_type VARCHAR(20) NOT NULL,
     organization_name VARCHAR(160),
     contact_email VARCHAR(160),
+    criticality VARCHAR(20) NOT NULL DEFAULT 'medium',
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT actors_type_check
-        CHECK (actor_type IN ('producer', 'consumer', 'producer_consumer'))
+        CHECK (actor_type IN ('producer', 'consumer', 'producer_consumer')),
+    CONSTRAINT actors_criticality_check
+        CHECK (criticality IN ('low', 'medium', 'high', 'critical'))
 );
 
 CREATE INDEX idx_actors_program
@@ -47,6 +50,7 @@ CREATE TABLE apis (
     sla_availability_percent NUMERIC(5, 2) NOT NULL,
     sla_latency_ms INTEGER NOT NULL,
     rate_limit_per_minute INTEGER,
+    criticality VARCHAR(20) NOT NULL DEFAULT 'medium',
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -60,6 +64,8 @@ CREATE TABLE apis (
         CHECK (sla_latency_ms > 0),
     CONSTRAINT apis_rate_limit_check
         CHECK (rate_limit_per_minute IS NULL OR rate_limit_per_minute > 0),
+    CONSTRAINT apis_criticality_check
+        CHECK (criticality IN ('low', 'medium', 'high', 'critical')),
     CONSTRAINT apis_id_producer_unique
         UNIQUE (id, producer_actor_id)
 );

@@ -1,0 +1,5 @@
+# Optional research dependencies for future full implementations.
+# Keep them outside requirements.txt until the runtime Docker image is ready for heavier builds.
+river==0.22.0
+torch==2.5.1
+networkx==3.4.2
