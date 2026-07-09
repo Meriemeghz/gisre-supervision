@@ -17,7 +17,6 @@ __pycache__/
 
 # AI model artifacts
 ai-layer/models/
-ai-layer/app/models/
 *.joblib
 *.keras
 *.h5
