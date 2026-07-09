@@ -5,10 +5,12 @@ export const dynamic = "force-dynamic";
 const BACKEND_INTERNAL_API_URL =
   process.env.BACKEND_INTERNAL_API_URL ||
   (process.env.NODE_ENV === "production" ? "http://backend:3000" : "http://localhost:3000");
+const BACKEND_FALLBACK_API_URL = process.env.BACKEND_FALLBACK_API_URL || "http://host.docker.internal:3000";
 
 const AI_INTERNAL_API_URL =
   process.env.AI_INTERNAL_API_URL ||
   (process.env.NODE_ENV === "production" ? "http://ai-layer:8000" : "http://localhost:8000");
+const AI_FALLBACK_API_URL = process.env.AI_FALLBACK_API_URL || "http://host.docker.internal:8000";
 
 type AiResult = {
   id: string;
@@ -17,9 +19,19 @@ type AiResult = {
   detected_anomaly_type: string;
   risk_score: number;
   severity: "low" | "medium" | "high" | "critical";
+  confidence: number | null;
   explanation: string | null;
   recommendation: string | null;
+  analysis_type: string;
+  validation: Record<string, unknown> | null;
+  validation_status: string | null;
+  validated_by: string | null;
+  validated_at: string | null;
+  validation_comment: string | null;
+  validation_source: string | null;
   metadata: Record<string, unknown> | null;
+  detected_at: string;
+  created_at: string;
 };
 
 type ApiCallEvent = {
@@ -72,7 +84,7 @@ type LiveEvent = {
 
 export async function GET(request: NextRequest) {
   const encoder = new TextEncoder();
-  const seen = new Set<string>();
+  const seen = new Map<string, string>();
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -84,22 +96,30 @@ export async function GET(request: NextRequest) {
 
       try {
         const snapshot = await loadLiveEvents(120);
-        snapshot.forEach((item) => seen.add(`${item.source}-${item.id}`));
+        snapshot.forEach((item) => seen.set(liveEventKey(item), liveEventSignature(item)));
         send("snapshot", snapshot.slice(0, 120));
+      } catch (error) {
+        send("stream_error", { message: error instanceof Error ? error.message : "Realtime snapshot unavailable" });
+      }
 
+      try {
         while (!request.signal.aborted) {
           await sleep(1000);
           heartbeat();
 
-          const events = await loadLiveEvents(80);
-          const fresh = events
-            .filter((item) => !seen.has(`${item.source}-${item.id}`))
-            .sort((left, right) => parseDate(left.timestamp) - parseDate(right.timestamp));
+          try {
+            const events = await loadLiveEvents(80);
+            const fresh = events
+              .filter((item) => shouldEmitLiveEvent(item, seen.get(liveEventKey(item))))
+              .sort((left, right) => parseDate(left.timestamp) - parseDate(right.timestamp));
 
-          fresh.forEach((item) => {
-            seen.add(`${item.source}-${item.id}`);
-            send("live_event", item);
-          });
+            fresh.forEach((item) => {
+              seen.set(liveEventKey(item), liveEventSignature(item));
+              send("live_event", item);
+            });
+          } catch (error) {
+            send("stream_error", { message: error instanceof Error ? error.message : "Realtime stream temporarily unavailable" });
+          }
         }
       } catch (error) {
         send("stream_error", { message: error instanceof Error ? error.message : "Erreur SSE" });
@@ -121,22 +141,86 @@ export async function GET(request: NextRequest) {
   });
 }
 
+function liveEventKey(event: LiveEvent) {
+  return `${event.source}-${event.id}`;
+}
+
+function liveEventSignature(event: LiveEvent) {
+  const result = event.aiResult;
+  if (!result) return "pending";
+  return [
+    result.id,
+    result.detected_at,
+    result.validation_status || "",
+    result.validated_at || "",
+    result.risk_score,
+    result.severity,
+  ].join("|");
+}
+
+function shouldEmitLiveEvent(event: LiveEvent, previousSignature: string | undefined) {
+  const nextSignature = liveEventSignature(event);
+  if (!previousSignature) return true;
+  if (nextSignature === "pending" && previousSignature !== "pending") return false;
+  return nextSignature !== previousSignature;
+}
+
 async function loadLiveEvents(limit: number) {
-  const [apiEvents, auditEvents, aiResults] = await Promise.all([
-    readJson<ApiCallEvent[]>(`${BACKEND_INTERNAL_API_URL}/events/api-calls?limit=${limit}`),
-    readJson<AuditEvent[]>(`${BACKEND_INTERNAL_API_URL}/events/audit-events?limit=${limit}`),
-    readJson<AiResult[]>(`${AI_INTERNAL_API_URL}/ai/results?limit=500`),
+  const [apiEventsResult, auditEventsResult, aiResultsResult] = await Promise.allSettled([
+    readJsonAny<ApiCallEvent[]>([
+      `${BACKEND_INTERNAL_API_URL}/events/api-calls?limit=${limit}`,
+      `${BACKEND_FALLBACK_API_URL}/events/api-calls?limit=${limit}`,
+    ]),
+    readJsonAny<AuditEvent[]>([
+      `${BACKEND_INTERNAL_API_URL}/events/audit-events?limit=${limit}`,
+      `${BACKEND_FALLBACK_API_URL}/events/audit-events?limit=${limit}`,
+    ]),
+    readJsonAny<AiResult[]>([
+      `${AI_INTERNAL_API_URL}/ai/results?limit=500&include_normal=true`,
+      `${AI_FALLBACK_API_URL}/ai/results?limit=500&include_normal=true`,
+    ]),
   ]);
+
+  const apiEvents = apiEventsResult.status === "fulfilled" ? apiEventsResult.value : [];
+  const auditEvents = auditEventsResult.status === "fulfilled" ? auditEventsResult.value : [];
+  const aiResults = aiResultsResult.status === "fulfilled" ? aiResultsResult.value : [];
+
+  if (!apiEvents.length && !auditEvents.length && apiEventsResult.status === "rejected" && auditEventsResult.status === "rejected") {
+    throw new Error(
+      `Backend event endpoints unavailable: ${errorMessage(apiEventsResult.reason)}; ${errorMessage(auditEventsResult.reason)}`,
+    );
+  }
 
   return buildLiveEvents(apiEvents, auditEvents, aiResults).slice(0, limit * 2);
 }
 
+async function readJsonAny<T>(urls: string[]): Promise<T> {
+  let lastError: unknown = null;
+  for (const url of urls) {
+    try {
+      return await readJson<T>(url);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Live source unreachable");
+}
+
 async function readJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, { cache: "no-store" });
+  let response: Response;
+  try {
+    response = await fetch(url, { cache: "no-store" });
+  } catch (error) {
+    throw new Error(`endpoint unreachable ${url}: ${errorMessage(error)}`);
+  }
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+    throw new Error(`${response.status} ${response.statusText} on ${url}`);
   }
   return response.json() as Promise<T>;
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error || "unknown error");
 }
 
 function buildLiveEvents(apiEvents: ApiCallEvent[], auditEvents: AuditEvent[], aiResults: AiResult[]): LiveEvent[] {
@@ -192,11 +276,38 @@ function buildLiveEvents(apiEvents: ApiCallEvent[], auditEvents: AuditEvent[], a
 }
 
 function findAiResult(eventId: string, correlationId: string | null, sourceType: string, aiResults: AiResult[]) {
+  const candidates = aiResults.filter((item) => {
+    if (item.source_event_type !== sourceType) return false;
+    if (item.source_event_id === eventId) return true;
+    return Boolean(
+      correlationId
+      && String(item.metadata?.correlation_id || "") === correlationId,
+    );
+  });
+
+  const traced = candidates.filter(hasEventAnalysisTrace);
   return (
-    aiResults.find((item) => item.source_event_id === eventId && item.source_event_type === sourceType) ||
-    aiResults.find((item) => String(item.metadata?.correlation_id || "") === correlationId && item.source_event_type === sourceType) ||
-    null
+    traced.find(isEventLevelResult)
+    || traced[0]
+    || candidates.find(isEventLevelResult)
+    || candidates[0]
+    || null
   );
+}
+
+function hasEventAnalysisTrace(result: AiResult) {
+  const analysisTrace = asRecord(result.metadata?.analysis_trace);
+  return Object.keys(asRecord(analysisTrace.event)).length > 0;
+}
+
+function isEventLevelResult(result: AiResult) {
+  return result.metadata?.analysis_level === "event";
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
 }
 
 function classifyApiEvent(event: ApiCallEvent, aiResult: AiResult | null): LiveState {

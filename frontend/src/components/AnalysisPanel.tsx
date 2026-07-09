@@ -15,18 +15,20 @@ export function AnalysisPanel({
   tone: "blue" | "teal";
   flowNames?: Map<string, string>;
 }) {
-  const byType = countBy(results, (item) => item.detected_anomaly_type)
+  const anomalyResults = results.filter(isAnomalyResult);
+
+  const byType = countBy(anomalyResults, (item) => item.detected_anomaly_type)
     .slice(0, 6)
     .map(([label, value]) => ({ label, value, tone }));
 
-  const byFlow = countBy(results, (item) => getFlowLabel(item.flow_code, flowNames))
+  const byFlow = countBy(anomalyResults, (item) => getFlowLabel(item.flow_code, flowNames))
     .slice(0, 6)
     .map(([label, value]) => ({ label, value, tone }));
 
   const avgScore =
-    results.length === 0
+    anomalyResults.length === 0
       ? "0.0"
-      : (results.reduce((sum, item) => sum + item.risk_score, 0) / results.length).toFixed(1);
+      : (anomalyResults.reduce((sum, item) => sum + item.risk_score, 0) / anomalyResults.length).toFixed(1);
 
   return (
     <section className="analysisPanel">
@@ -36,7 +38,7 @@ export function AnalysisPanel({
           <p>{subtitle}</p>
         </div>
         <div className="analysisStats">
-          <span>{results.length} incidents</span>
+          <span>{anomalyResults.length} incidents</span>
           <strong>Score moyen {avgScore}</strong>
         </div>
       </div>
@@ -47,7 +49,7 @@ export function AnalysisPanel({
             <h2>Derniers resultats</h2>
           </div>
           <div className="cardBody">
-            <IncidentTable results={results.slice(0, 6)} compact flowNames={flowNames} />
+            <IncidentTable results={anomalyResults.slice(0, 6)} compact flowNames={flowNames} />
           </div>
         </div>
 
@@ -73,6 +75,10 @@ export function AnalysisPanel({
       </div>
     </section>
   );
+}
+
+function isAnomalyResult(item: AiResult) {
+  return item.detected_anomaly_type !== "NORMAL" && Number(item.risk_score || 0) > 0;
 }
 
 function getFlowLabel(flowCode: string | null, flowNames?: Map<string, string>) {

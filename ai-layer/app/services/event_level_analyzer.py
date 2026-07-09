@@ -3,7 +3,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.ai_models.event_level import EventLevelRandomForestModel, EventLevelRulesEngineModel
+from app.ai_models.event_level import (
+    EventLevelAutoencoderMLPModel,
+    EventLevelIsolationForestModel,
+    EventLevelLocalOutlierFactorModel,
+    EventLevelRandomForestModel,
+    EventLevelRulesEngineModel,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -13,8 +19,18 @@ class EventLevelAnalyzer:
 
     def __init__(self) -> None:
         self.active_model = EventLevelRulesEngineModel()
-        self.random_forest_model = EventLevelRandomForestModel()
-        self.random_forest_model.load()
+        self.secondary_models = [
+            EventLevelRandomForestModel(),
+            EventLevelIsolationForestModel(),
+            EventLevelLocalOutlierFactorModel(),
+            EventLevelAutoencoderMLPModel(),
+        ]
+        for model in self.secondary_models:
+            model.load()
+        self.models = {
+            self.active_model.model_id: self.active_model,
+            **{model.model_id: model for model in self.secondary_models},
+        }
         self.compatible_models = [
             "event_rules_engine",
             "event_random_forest",
@@ -23,21 +39,26 @@ class EventLevelAnalyzer:
             "event_autoencoder_mlp",
         ]
 
-    def analyze(self, event: dict[str, Any]) -> list[dict[str, Any]]:
-        detections = self.active_model.detect(event)
-        anomalies = [self._to_engine_anomaly(detection) for detection in detections]
+    def analyze(self, event: dict[str, Any], model_id: str | None = None) -> list[dict[str, Any]]:
+        model = self.models.get(model_id or self.active_model.model_id)
+        if model is None:
+            return []
 
-        if self.random_forest_model.is_trained:
-            prediction = self.random_forest_model.predict(event)
-            if prediction.get("anomaly_detected"):
-                anomalies.append(self._to_engine_anomaly(prediction))
+        if isinstance(model, EventLevelRulesEngineModel):
+            detections = model.detect(event)
+            anomalies = [self._to_engine_anomaly(detection, model) for detection in detections]
+        elif not model.is_trained:
+            anomalies = []
+        else:
+            prediction = model.predict(event)
+            anomalies = [self._to_engine_anomaly(prediction, model)] if prediction.get("anomaly_detected") else []
 
         if anomalies:
             logger.info(
-                "[AI-EVENT] anomalies detected count=%s flow=%s model=%s",
+                "[AI-EVENT] anomalies detected count=%s flow=%s models=%s",
                 len(anomalies),
                 event.get("flow_code"),
-                self.active_model.model_id,
+                [anomaly.get("model", {}).get("id") for anomaly in anomalies],
             )
 
         return anomalies
@@ -50,7 +71,7 @@ class EventLevelAnalyzer:
         }
 
     @staticmethod
-    def _to_engine_anomaly(detection: dict[str, Any]) -> dict[str, Any]:
+    def _to_engine_anomaly(detection: dict[str, Any], model: Any | None = None) -> dict[str, Any]:
         return {
             "detected_anomaly_type": detection["anomaly_type"],
             "confidence": detection.get("confidence"),
@@ -58,8 +79,9 @@ class EventLevelAnalyzer:
             "analysis_type": "realtime",
             "analysis_level": "event",
             "model": {
-                "id": detection.get("model_id"),
-                "name": detection.get("model_name"),
+                "id": detection.get("model_id") or getattr(model, "model_id", None),
+                "name": detection.get("model_name") or getattr(model, "model_name", None),
+                "version": getattr(model, "version", None),
                 "family": "event_level",
             },
         }

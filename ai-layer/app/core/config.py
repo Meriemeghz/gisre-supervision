@@ -25,6 +25,14 @@ class Settings:
     ai_enable_realtime: bool = _get_bool("AI_ENABLE_REALTIME", True)
     ai_enable_historical: bool = _get_bool("AI_ENABLE_HISTORICAL", True)
     model_storage_dir: str = os.getenv("MODEL_STORAGE_DIR", "/app/models")
+    openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+    redis_url: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
+    cache_enabled: bool = _get_bool("CACHE_ENABLED", True)
+    rl_triage_enabled: bool = _get_bool("RL_TRIAGE_ENABLED", False)
+    rl_min_experiences: int = int(os.getenv("RL_MIN_EXPERIENCES", "30"))
+    rl_confidence_threshold: float = float(os.getenv("RL_CONFIDENCE_THRESHOLD", "0.80"))
+    rl_epsilon: float = float(os.getenv("RL_EPSILON", "0.10"))
+    include_demo_feedback: bool = _get_bool("INCLUDE_DEMO_FEEDBACK", False)
 
 
 settings = Settings()

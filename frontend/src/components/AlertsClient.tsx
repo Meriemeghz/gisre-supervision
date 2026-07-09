@@ -18,22 +18,34 @@ export function AlertsClient() {
     let active = true;
 
     async function load() {
-      try {
-        const [data, flowData] = await Promise.all([fetchAiResults(300), fetchFlowMetrics()]);
-        if (active) {
-          setResults(data);
-          setFlows(flowData);
-          setError(null);
-        }
-      } catch (err) {
-        if (active) {
-          setError(err instanceof Error ? err.message : "Erreur de chargement");
-        }
+      if (document.visibilityState === "hidden") return;
+      const [resultsResponse, flowsResponse] = await Promise.allSettled([fetchAiResults(150), fetchFlowMetrics()]);
+      if (!active) return;
+
+      if (resultsResponse.status === "fulfilled") {
+        setResults(resultsResponse.value);
       }
+
+      if (flowsResponse.status === "fulfilled") {
+        setFlows(flowsResponse.value);
+      }
+
+      if (resultsResponse.status === "rejected") {
+        setError(resultsResponse.reason instanceof Error ? resultsResponse.reason.message : "Erreur de chargement des alertes");
+        return;
+      }
+
+      if (flowsResponse.status === "rejected") {
+        setFlows([]);
+        setError("Les alertes IA sont chargees, mais les noms de flows backend sont indisponibles pour le moment.");
+        return;
+      }
+
+      setError(null);
     }
 
     load();
-    const timer = window.setInterval(load, 10000);
+    const timer = window.setInterval(load, 30000);
     return () => {
       active = false;
       window.clearInterval(timer);

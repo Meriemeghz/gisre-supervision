@@ -35,8 +35,9 @@ export function EventsClient() {
     let active = true;
 
     async function load() {
+      if (document.visibilityState === "hidden") return;
       try {
-        const [apiData, auditData, flowData] = await Promise.all([fetchApiEvents(500), fetchAuditEvents(500), fetchFlowMetrics()]);
+        const [apiData, auditData, flowData] = await Promise.all([fetchApiEvents(200), fetchAuditEvents(200), fetchFlowMetrics()]);
         if (active) {
           setApiEvents(apiData);
           setAuditEvents(auditData);
@@ -52,7 +53,7 @@ export function EventsClient() {
     }
 
     load();
-    const timer = window.setInterval(load, 10000);
+    const timer = window.setInterval(load, 30000);
     return () => {
       active = false;
       window.clearInterval(timer);

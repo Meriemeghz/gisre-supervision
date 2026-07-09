@@ -23,9 +23,27 @@ from app.ai_models.event_level import (
     EventLevelRandomForestModel,
     EventLevelRulesEngineModel,
 )
+from app.ai_models.flow_level import (
+    FlowAutoencoderModel,
+    FlowGRUProfileModel,
+    FlowKMeansProfileModel,
+    FlowRulesEngineModel,
+)
 from app.ai_models.graph_ai import GDNModel, MTADGATModel, TopoGDNModel
+from app.ai_models.graph_level import (
+    GraphGDNModel,
+    GraphMTADGATModel,
+    GraphRulesEngineModel,
+    GraphTopoGDNModel,
+)
 from app.ai_models.hybrid import EnsembleModel, HybridRiskScoringModel, RulesEngineModel
 from app.ai_models.streaming import ADWINModel, HalfSpaceTreesModel, RiverModel
+from app.ai_models.temporal_level import (
+    TemporalGRUSequenceModel,
+    TemporalLSTMSequenceModel,
+    TemporalRulesEngineModel,
+    TemporalTranADModel,
+)
 from app.ai_models.transformers import AnomalyTransformerModel, LogBERTModel, TranADModel
 
 
@@ -37,6 +55,18 @@ class ModelRegistry:
         EventLevelIsolationForestModel.model_id: EventLevelIsolationForestModel,
         EventLevelLocalOutlierFactorModel.model_id: EventLevelLocalOutlierFactorModel,
         EventLevelAutoencoderMLPModel.model_id: EventLevelAutoencoderMLPModel,
+        TemporalRulesEngineModel.model_id: TemporalRulesEngineModel,
+        TemporalGRUSequenceModel.model_id: TemporalGRUSequenceModel,
+        TemporalLSTMSequenceModel.model_id: TemporalLSTMSequenceModel,
+        TemporalTranADModel.model_id: TemporalTranADModel,
+        FlowRulesEngineModel.model_id: FlowRulesEngineModel,
+        FlowKMeansProfileModel.model_id: FlowKMeansProfileModel,
+        FlowAutoencoderModel.model_id: FlowAutoencoderModel,
+        FlowGRUProfileModel.model_id: FlowGRUProfileModel,
+        GraphRulesEngineModel.model_id: GraphRulesEngineModel,
+        GraphGDNModel.model_id: GraphGDNModel,
+        GraphMTADGATModel.model_id: GraphMTADGATModel,
+        GraphTopoGDNModel.model_id: GraphTopoGDNModel,
         OneClassSVMModel.model_id: OneClassSVMModel,
         LocalOutlierFactorModel.model_id: LocalOutlierFactorModel,
         KMeansModel.model_id: KMeansModel,

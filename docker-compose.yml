@@ -41,6 +41,13 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./database:/docker-entrypoint-initdb.d
 
+  redis:
+    image: redis:7-alpine
+    container_name: gisre_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
   simulator:
     build: ./simulator
     container_name: gisre_simulator
@@ -83,6 +90,7 @@ services:
     depends_on:
       - kafka
       - postgres
+      - redis
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       KAFKA_GROUP_ID: gisre-ai-consumer-group
@@ -96,6 +104,14 @@ services:
       AI_ENABLE_REALTIME: "true"
       AI_ENABLE_HISTORICAL: "true"
       MODEL_STORAGE_DIR: /app/models
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      REDIS_URL: redis://redis:6379/0
+      CACHE_ENABLED: "true"
+      RL_TRIAGE_ENABLED: "true"
+      RL_MIN_EXPERIENCES: "1"
+      RL_CONFIDENCE_THRESHOLD: "0.50"
+      RL_EPSILON: "0.10"
+      INCLUDE_DEMO_FEEDBACK: "true"
     ports:
       - "8000:8000"
     volumes:

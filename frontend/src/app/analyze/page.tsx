@@ -1,218 +1,307 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
-import { fetchFlowMetrics } from "@/lib/api";
-import { getAiModels } from "@/lib/api/ai-models";
-import { runHistoricalAnalysis } from "@/lib/api/historical-analysis";
-import type { HistoricalAnalyzeResult } from "@/lib/api/historical-analysis";
-import type { AiModel } from "@/types/ai-models";
-import type { FlowMetric } from "@/lib/api";
-import { SeverityBadge } from "@/components/SeverityBadge";
+import type { ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AIHistoricalInsights } from "@/components/analysis/AIHistoricalInsights";
+import {
+  HistoricalFilters,
+  type HistoricalFilterState,
+} from "@/components/analysis/HistoricalFilters";
+import { HistoricalAnomalyFamilies } from "@/components/analysis/HistoricalAnomalyFamilies";
+import { RootCauseHistoricalAnalysis } from "@/components/analysis/RootCauseHistoricalAnalysis";
+import { SupervisionQualityEvolution } from "@/components/analysis/SupervisionQualityEvolution";
+import { TemporalAnomalyHeatmap } from "@/components/analysis/TemporalAnomalyHeatmap";
+import { TopEvolvingAnomalies } from "@/components/analysis/TopEvolvingAnomalies";
+import {
+  getHistoricalAnalytics,
+  type HistoricalAnalytics,
+  type HistoricalAnalyticsFilters,
+} from "@/lib/api/historical-analysis";
+
+const INITIAL_FILTERS: HistoricalFilterState = {
+  preset: "7d",
+  startDate: "",
+  endDate: "",
+  flowCode: "",
+  apiCode: "",
+  producerCode: "",
+  consumerCode: "",
+  anomalyType: "",
+};
 
 export default function AnalyzePage() {
-  const [models, setModels] = useState<AiModel[]>([]);
-  const [flows, setFlows] = useState<FlowMetric[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [filters, setFilters] = useState(INITIAL_FILTERS);
+  const [data, setData] = useState<HistoricalAnalytics | null>(null);
+  const [filterOptions, setFilterOptions] = useState<HistoricalAnalytics["filter_options"] | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<HistoricalAnalyzeResult | null>(null);
-  const [form, setForm] = useState({
-    start_date: "",
-    end_date: "",
-    flow_code: "",
-    api_name: "",
-    producer: "",
-    consumer: "",
-    criticality: "all",
-    event_type: "api_call",
-    sample_size: 500,
-    sampling_method: "latest",
-    model_id: "isolation_forest",
-  });
+  const [expandedCard, setExpandedCard] = useState<string | null>(null);
+  const requestController = useRef<AbortController | null>(null);
 
-  useEffect(() => {
-    async function load() {
-      setModels(await getAiModels());
-      setFlows(await fetchFlowMetrics());
-    }
-    load();
-  }, []);
-
-  async function submit(event: FormEvent) {
-    event.preventDefault();
+  const loadAnalytics = useCallback(async (nextFilters: HistoricalFilterState) => {
+    requestController.current?.abort();
+    const controller = new AbortController();
+    requestController.current = controller;
     setLoading(true);
     setError(null);
     try {
-      const payload = {
-        ...form,
-        start_date: form.start_date || undefined,
-        end_date: form.end_date || undefined,
-        flow_code: form.flow_code || undefined,
-        api_name: form.api_name || undefined,
-        producer: form.producer || undefined,
-        consumer: form.consumer || undefined,
-      };
-      setResult(await runHistoricalAnalysis(payload));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Erreur analyse historique");
+      const result = await getHistoricalAnalytics(toApiFilters(nextFilters), controller.signal);
+      if (controller.signal.aborted) return;
+      setData(result);
+      setFilterOptions(result.filter_options);
+    } catch (loadError) {
+      if (controller.signal.aborted) return;
+      setError(loadError instanceof Error ? loadError.message : "Historical analytics could not be loaded");
     } finally {
-      setLoading(false);
+      if (requestController.current === controller) {
+        requestController.current = null;
+        setLoading(false);
+      }
     }
-  }
+  }, []);
+
+  useEffect(() => {
+    void loadAnalytics(INITIAL_FILTERS);
+    return () => requestController.current?.abort();
+  }, [loadAnalytics]);
+
+  const analysisCards = useMemo(() => {
+    if (!data) return [];
+    return [
+      {
+        id: "families",
+        title: "Historical anomaly families evolution",
+        meta: "Stacked family trend",
+        compact: <HistoricalAnomalyFamilies timeline={data.anomaly_timeline} period={data.period} />,
+        expanded: <HistoricalAnomalyFamilies timeline={data.anomaly_timeline} period={data.period} />,
+      },
+      {
+        id: "heatmap",
+        title: "Temporal anomaly heatmap",
+        meta: "Day / hour concentration",
+        compact: <TemporalAnomalyHeatmap cells={data.temporal_heatmap} />,
+        expanded: <TemporalAnomalyHeatmap cells={data.temporal_heatmap} />,
+      },
+      {
+        id: "sankey",
+        title: "Anomaly propagation paths",
+        meta: "Producer -> API -> anomaly",
+        compact: <RootCauseHistoricalAnalysis chains={data.root_cause_chains || []} mode="sankey" />,
+        expanded: <RootCauseHistoricalAnalysis chains={data.root_cause_chains || []} mode="sankey" />,
+      },
+      {
+        id: "evolving",
+        title: "Top evolving anomalies",
+        meta: "Top 8 in compact view",
+        compact: <TopEvolvingAnomalies anomalies={data.evolving_anomalies} limit={8} />,
+        expanded: <TopEvolvingAnomalies anomalies={data.evolving_anomalies} />,
+      },
+      {
+        id: "chains",
+        title: "Top Root Cause Chains",
+        meta: "Top 8 in compact view",
+        compact: <RootCauseHistoricalAnalysis chains={data.root_cause_chains || []} mode="table" tableLimit={8} />,
+        expanded: <RootCauseHistoricalAnalysis chains={data.root_cause_chains || []} mode="table" tableLimit={50} />,
+      },
+      {
+        id: "interpretation",
+        title: "Historical interpretation",
+        meta: "Operational insight",
+        compact: <AIHistoricalInsights data={data} />,
+        expanded: <AIHistoricalInsights data={data} />,
+      },
+    ];
+  }, [data]);
+
+  const selectedCard = analysisCards.find((card) => card.id === expandedCard) || null;
 
   return (
-    <>
-      <div className="pageHeader">
+    <main className="historicalAnalysisPage">
+      <header className="pageHeader historicalPageHeader">
         <div>
-          <h1>Analyse historique personnalisee</h1>
-          <p>Selectionne un echantillon PostgreSQL, choisis un modele IA, puis lance une investigation a la demande.</p>
+          <span className="historicalEyebrow">Historical intelligence</span>
+          <h1>Historical Platform Analysis</h1>
+          <p>Understand recurring anomalies, long-term risk evolution and the components repeatedly involved in platform degradation.</p>
         </div>
-        <span className="statusPill">Investigation IA</span>
-      </div>
+        <span className="statusPill">Aggregated history</span>
+      </header>
 
-      {error && <div className="errorBox">Impossible de lancer l'analyse: {error}</div>}
+      <HistoricalFilters
+        value={filters}
+        options={filterOptions}
+        loading={loading}
+        onChange={setFilters}
+        onApply={() => void loadAnalytics(filters)}
+      />
 
-      <section className="analyzeLayout">
-        <form className="card" onSubmit={submit}>
-          <div className="cardHeader">
-            <h2>Parametres d'analyse</h2>
-          </div>
-          <div className="cardBody analyzeForm">
-            <label>
-              Date debut
-              <input className="input" type="datetime-local" value={form.start_date} onChange={(event) => setForm({ ...form, start_date: event.target.value })} />
-            </label>
-            <label>
-              Date fin
-              <input className="input" type="datetime-local" value={form.end_date} onChange={(event) => setForm({ ...form, end_date: event.target.value })} />
-            </label>
-            <label>
-              Flow
-              <select className="select" value={form.flow_code} onChange={(event) => setForm({ ...form, flow_code: event.target.value })}>
-                <option value="">Tous les flows</option>
-                {flows.map((flow) => (
-                  <option key={flow.flow_code} value={flow.flow_code}>{flow.flow_code} - {flow.flow_name}</option>
-                ))}
-              </select>
-            </label>
-            <label>
-              API
-              <input className="input" placeholder="verify_health_coverage" value={form.api_name} onChange={(event) => setForm({ ...form, api_name: event.target.value })} />
-            </label>
-            <label>
-              Producteur
-              <input className="input" placeholder="CNSS / AMO" value={form.producer} onChange={(event) => setForm({ ...form, producer: event.target.value })} />
-            </label>
-            <label>
-              Consommateur
-              <input className="input" placeholder="Hopital_Rabat" value={form.consumer} onChange={(event) => setForm({ ...form, consumer: event.target.value })} />
-            </label>
-            <label>
-              Criticite
-              <select className="select" value={form.criticality} onChange={(event) => setForm({ ...form, criticality: event.target.value })}>
-                <option value="all">Toutes</option>
-                <option value="critical">Critical</option>
-                <option value="high">High</option>
-                <option value="medium">Medium</option>
-                <option value="low">Low</option>
-              </select>
-            </label>
-            <label>
-              Type evenement
-              <select className="select" value={form.event_type} onChange={(event) => setForm({ ...form, event_type: event.target.value })}>
-                <option value="api_call">Appels API</option>
-                <option value="audit_event">Audit events</option>
-              </select>
-            </label>
-            <label>
-              Taille echantillon
-              <input className="input" type="number" min={1} max={2000} value={form.sample_size} onChange={(event) => setForm({ ...form, sample_size: Number(event.target.value) })} />
-            </label>
-            <label>
-              Methode echantillonnage
-              <select className="select" value={form.sampling_method} onChange={(event) => setForm({ ...form, sampling_method: event.target.value })}>
-                <option value="latest">Derniers evenements</option>
-                <option value="random">Aleatoire</option>
-                <option value="critical">Evenements critiques</option>
-                <option value="by_flow">Par flow</option>
-              </select>
-            </label>
-            <label>
-              Modele IA
-              <select className="select" value={form.model_id} onChange={(event) => setForm({ ...form, model_id: event.target.value })}>
-                {models.map((model) => (
-                  <option key={model.id} value={model.id}>{model.name}</option>
-                ))}
-              </select>
-            </label>
-            <button className="button primary analyzeButton" disabled={loading}>
-              {loading ? "Analyse en cours..." : "Lancer l'analyse"}
-            </button>
-          </div>
-        </form>
+      {error && <div className="errorBox">Historical data unavailable: {error}</div>}
+      {loading && !data && <div className="historicalLoading">Loading historical platform signals...</div>}
 
-        <div className="grid">
-          <div className="card">
-            <div className="cardHeader"><h2>Resultat</h2></div>
-            <div className="cardBody">
-              {result ? <AnalysisSummary result={result} /> : <p className="muted">Aucune analyse lancee pour le moment.</p>}
-            </div>
-          </div>
-          <div className="card">
-            <div className="cardHeader"><h2>Anomalies detectees</h2></div>
-            <div className="cardBody">
-              {result ? <ResultTable result={result} /> : <p className="muted">Les anomalies apparaitront ici apres execution.</p>}
-            </div>
-          </div>
-        </div>
-      </section>
-    </>
+      {data && (
+        <>
+          <HistoricalOverview data={data} />
+          <section className="historicalQualityBand">
+            <SupervisionQualityEvolution quality={data.supervision_quality} />
+          </section>
+          <section className="historicalCompactGrid" aria-label="Historical analysis visualizations">
+            {analysisCards.map((card) => (
+              <ExpandableAnalysisCard
+                key={card.id}
+                title={card.title}
+                meta={card.meta}
+                onExpand={() => setExpandedCard(card.id)}
+              >
+                {card.compact}
+              </ExpandableAnalysisCard>
+            ))}
+          </section>
+          {selectedCard && (
+            <AnalysisExpandModal
+              title={selectedCard.title}
+              meta={selectedCard.meta}
+              filters={filters}
+              onClose={() => setExpandedCard(null)}
+            >
+              {selectedCard.expanded}
+            </AnalysisExpandModal>
+          )}
+        </>
+      )}
+    </main>
   );
 }
 
-function AnalysisSummary({ result }: { result: HistoricalAnalyzeResult }) {
+function ExpandableAnalysisCard({
+  title,
+  meta,
+  children,
+  onExpand,
+}: {
+  title: string;
+  meta: string;
+  children: ReactNode;
+  onExpand: () => void;
+}) {
   return (
-    <div className="analysisResultGrid">
-      <div className="metricBox"><span>Analysis ID</span><strong className="smallStrong">{result.analysis_id}</strong></div>
-      <div className="metricBox"><span>Modele</span><strong>{result.model_used}</strong></div>
-      <div className="metricBox"><span>Records analyses</span><strong>{result.records_analyzed}</strong></div>
-      <div className="metricBox"><span>Anomalies</span><strong>{result.anomalies_detected}</strong></div>
-      <div className="metricBox"><span>Score moyen</span><strong>{result.average_risk_score}</strong></div>
-      <div className="metricBox"><span>Critiques</span><strong>{result.critical_anomalies}</strong></div>
+    <article className="analysisCompactCard">
+      <header className="analysisCompactCardHeader">
+        <div>
+          <span>{meta}</span>
+          <h2>{title}</h2>
+        </div>
+        <button className="analysisExpandButton" type="button" onClick={onExpand}>
+          Agrandir
+        </button>
+      </header>
+      <div className="analysisCompactCardBody">{children}</div>
+    </article>
+  );
+}
+
+function AnalysisExpandModal({
+  title,
+  meta,
+  filters,
+  children,
+  onClose,
+}: {
+  title: string;
+  meta: string;
+  filters: HistoricalFilterState;
+  children: ReactNode;
+  onClose: () => void;
+}) {
+  return (
+    <div className="analysisModalOverlay" role="dialog" aria-modal="true" aria-label={title}>
+      <article className="analysisModalPanel">
+        <header className="analysisModalHeader">
+          <div>
+            <span>{meta}</span>
+            <h2>{title}</h2>
+            <small>{formatAppliedFilters(filters)}</small>
+          </div>
+          <button className="analysisExpandButton" type="button" onClick={onClose}>
+            Fermer
+          </button>
+        </header>
+        <div className="analysisModalBody">{children}</div>
+      </article>
     </div>
   );
 }
 
-function ResultTable({ result }: { result: HistoricalAnalyzeResult }) {
-  if (result.results.length === 0) {
-    return <p className="muted">Aucune anomalie detectee sur cet echantillon.</p>;
+function formatAppliedFilters(filters: HistoricalFilterState) {
+  const active = [
+    `period: ${filters.preset}`,
+    filters.flowCode ? `flow: ${filters.flowCode}` : "",
+    filters.apiCode ? `api: ${filters.apiCode}` : "",
+    filters.producerCode ? `producer: ${filters.producerCode}` : "",
+    filters.consumerCode ? `consumer: ${filters.consumerCode}` : "",
+    filters.anomalyType ? `anomaly: ${filters.anomalyType}` : "",
+  ].filter(Boolean);
+  return `Filtres appliques - ${active.join(" / ")}`;
+}
+
+function HistoricalOverview({ data }: { data: HistoricalAnalytics }) {
+  const quality = data.supervision_quality;
+  const periodStart = new Date(data.period.start_date);
+  const periodEnd = new Date(data.period.end_date);
+  const formatDate = (date: Date) => Number.isNaN(date.getTime())
+    ? "Not available"
+    : date.toLocaleString("fr-FR", { dateStyle: "medium", timeStyle: "short" });
+
+  return (
+    <section className="historicalOverview" aria-label="Historical period summary">
+      <article><span>Period start</span><strong>{formatDate(periodStart)}</strong><small>Selected historical window</small></article>
+      <article><span>Period end</span><strong>{formatDate(periodEnd)}</strong><small>Exclusive query boundary</small></article>
+      <article><span>AI results</span><strong>{quality.total_results}</strong><small>{data.period.bucket} aggregation</small></article>
+      <article><span>Anomalies</span><strong>{quality.anomalies_detected}</strong><small>{quality.normal_results} normal results</small></article>
+    </section>
+  );
+}
+
+function toApiFilters(filters: HistoricalFilterState): HistoricalAnalyticsFilters {
+  const period = resolvePeriod(filters);
+  return {
+    start_date: period.start.toISOString(),
+    end_date: period.end.toISOString(),
+    flow_code: filters.flowCode || undefined,
+    api_code: filters.apiCode || undefined,
+    producer_code: filters.producerCode || undefined,
+    consumer_code: filters.consumerCode || undefined,
+    anomaly_type: filters.anomalyType || undefined,
+  };
+}
+
+function resolvePeriod(filters: HistoricalFilterState) {
+  if (filters.preset === "custom") {
+    const start = parseCustomDate(filters.startDate, "start");
+    const end = parseCustomDate(filters.endDate, "end");
+    if (!filters.startDate || !filters.endDate || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      throw new Error("Select a valid custom start and end date");
+    }
+    if (start >= end) {
+      throw new Error("The start date must be before the end date");
+    }
+    return { start, end };
   }
 
-  return (
-    <div className="tableScroll">
-      <table className="table">
-        <thead>
-          <tr>
-            <th>Type</th>
-            <th>Flow</th>
-            <th>Score</th>
-            <th>Severite</th>
-            <th>Diagnostic</th>
-            <th>Recommandation</th>
-          </tr>
-        </thead>
-        <tbody>
-          {result.results.map((item, index) => (
-            <tr key={`${item.detected_anomaly_type}-${index}`}>
-              <td className="typeCell">{item.detected_anomaly_type}</td>
-              <td>{item.flow_code || "n/a"}</td>
-              <td className="score">{item.risk_score}</td>
-              <td><SeverityBadge severity={item.severity as "low" | "medium" | "high" | "critical"} /></td>
-              <td>{item.explanation}</td>
-              <td>{item.recommendation}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+  const end = new Date();
+  const durationMs = {
+    "24h": 24 * 60 * 60 * 1000,
+    "7d": 7 * 24 * 60 * 60 * 1000,
+    "30d": 30 * 24 * 60 * 60 * 1000,
+    "90d": 90 * 24 * 60 * 60 * 1000,
+  }[filters.preset];
+  return { start: new Date(end.getTime() - durationMs), end };
+}
+
+function parseCustomDate(value: string, boundary: "start" | "end") {
+  if (!value) return new Date(Number.NaN);
+  const normalized = value.includes("T")
+    ? value
+    : boundary === "start"
+      ? `${value}T00:00:00`
+      : `${value}T23:59:59`;
+  return new Date(normalized);
 }

@@ -1,5 +1,21 @@
-export const AI_API_URL = process.env.NEXT_PUBLIC_AI_API_URL || "/api/ai";
-export const BACKEND_API_URL = process.env.NEXT_PUBLIC_BACKEND_API_URL || "/api/backend";
+const RAW_AI_API_URL = process.env.NEXT_PUBLIC_AI_API_URL || "/api/ai";
+const RAW_BACKEND_API_URL = process.env.NEXT_PUBLIC_BACKEND_API_URL || "/api/backend";
+
+function browserSafeApiUrl(value: string, proxyPath: string) {
+  if (typeof window === "undefined") return value;
+  try {
+    const url = new URL(value, window.location.origin);
+    if (["backend", "ai-layer"].includes(url.hostname)) {
+      return proxyPath;
+    }
+  } catch {
+    return proxyPath;
+  }
+  return value;
+}
+
+export const AI_API_URL = browserSafeApiUrl(RAW_AI_API_URL, "/api/ai");
+export const BACKEND_API_URL = browserSafeApiUrl(RAW_BACKEND_API_URL, "/api/backend");
 
 export type Severity = "low" | "medium" | "high" | "critical";
 
@@ -18,6 +34,11 @@ export type AiResult = {
   recommendation: string | null;
   analysis_type: string;
   validation: Record<string, unknown> | null;
+  validation_status?: string | null;
+  validated_by?: string | null;
+  validated_at?: string | null;
+  validation_comment?: string | null;
+  validation_source?: string | null;
   metadata: Record<string, unknown> | null;
   detected_at: string;
   created_at: string;
@@ -153,20 +174,60 @@ export type AiModelInfo = {
 };
 
 async function readJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, { cache: "no-store" });
+  let response: Response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    response = await fetch(url, { cache: "no-store", signal: controller.signal });
+  } catch (error) {
+    throw new Error(`endpoint unreachable (${url}): ${error instanceof Error ? error.message : "fetch failed"}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(detail || `${response.status} ${response.statusText}`);
+    throw new Error(formatHttpError(url, response.status, response.statusText, detail));
   }
   return response.json() as Promise<T>;
 }
 
+function formatHttpError(url: string, status: number, statusText: string, detail: string) {
+  const parsed = parseErrorDetail(detail);
+  if (status === 404) {
+    return `endpoint not found (${url})`;
+  }
+  if (status >= 500) {
+    return `backend unavailable (${status}) on ${url}: ${parsed || statusText}`;
+  }
+  return `${status} ${statusText}${parsed ? `: ${parsed}` : ""}`;
+}
+
+function parseErrorDetail(detail: string) {
+  if (!detail) return "";
+  try {
+    const payload = JSON.parse(detail) as { detail?: unknown; error?: unknown; message?: unknown; target?: unknown };
+    const message = payload.message || payload.detail || payload.error;
+    const target = typeof payload.target === "string" ? ` target=${payload.target}` : "";
+    return `${typeof message === "string" ? message : detail}${target}`;
+  } catch {
+    return detail;
+  }
+}
+
 export function fetchAiResults(limit = 100) {
-  return readJson<AiResult[]>(`${AI_API_URL}/ai/results?limit=${limit}`);
+  return readJson<AiResult[]>(`${AI_API_URL}/ai/results?limit=${limit}`).then((results) => results.filter(isAnomalyResult));
+}
+
+export function fetchAiWorkflowResults(limit = 200) {
+  return readJson<AiResult[]>(`${AI_API_URL}/ai/results?limit=${limit}&include_normal=true`);
 }
 
 export function fetchAiSummary() {
-  return readJson<AiSummary>(`${AI_API_URL}/ai/summary`);
+  return readJson<AiSummary>(`${AI_API_URL}/ai/summary`).then((summary) => ({
+    ...summary,
+    by_type: summary.by_type.filter((item) => item.detected_anomaly_type !== "NORMAL"),
+  }));
 }
 
 export function fetchBackendSummary() {
@@ -195,4 +256,128 @@ export function fetchAiModels() {
 
 export function fetchAiModel(id: string) {
   return readJson<AiModelInfo>(`${AI_API_URL}/ai-models/${id}`);
+}
+
+export type ValidationSummary = {
+  unverified: number;
+  pending_review: number;
+  confirmed: number;
+  partial: number;
+  false_positive: number;
+  ignored: number;
+  resolved: number;
+  auto_confirmed: number;
+  auto_dismissed: number;
+  pending_review_total: number;
+  reviewed: number;
+};
+
+export type IncidentInterpretResult = {
+  configured: boolean;
+  message?: string;
+  diagnosis?: string;
+  is_likely_real?: boolean;
+  confidence?: "high" | "medium" | "low";
+  risk_assessment?: string;
+  action_plan?: string[];
+  confidence_note?: string;
+};
+
+export type DemoValidationSeedResult = {
+  requested_limit: number;
+  updated: number;
+  validation_source: "demo_seed";
+  validated_by: "demo_supervisor";
+  include_demo_feedback: boolean;
+  counts: Record<string, number>;
+  results: AiResult[];
+};
+
+export function fetchPendingReviewResults(limit = 100) {
+  return readJson<AiResult[]>(`${AI_API_URL}/ai/results/pending-review?limit=${limit}`);
+}
+
+export function fetchValidationSummary() {
+  return readJson<ValidationSummary>(`${AI_API_URL}/ai/results/validation-summary`);
+}
+
+export async function generateDemoValidations(limit: 20 | 50 | 100): Promise<DemoValidationSeedResult> {
+  let response: Response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    response = await fetch(`${AI_API_URL}/results/demo-validations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ limit }),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } catch (error) {
+    throw new Error(`demo validation endpoint unreachable: ${error instanceof Error ? error.message : "fetch failed"}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(formatHttpError("/results/demo-validations", response.status, response.statusText, detail));
+  }
+  return response.json() as Promise<DemoValidationSeedResult>;
+}
+
+export async function patchResultValidation(
+  id: string,
+  status: string,
+  comment: string | null,
+  validatedBy: string,
+): Promise<AiResult> {
+  let response: Response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    response = await fetch(`${AI_API_URL}/results/${id}/validation`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ validation_status: status, validation_comment: comment, validated_by: validatedBy }),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } catch (error) {
+    throw new Error(`validation endpoint unreachable: ${error instanceof Error ? error.message : "fetch failed"}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(formatHttpError(`/results/${id}/validation`, response.status, response.statusText, detail));
+  }
+  return response.json() as Promise<AiResult>;
+}
+
+export async function postIncidentInterpret(resultId: string): Promise<IncidentInterpretResult> {
+  let response: Response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 65000);
+  try {
+    response = await fetch(`${AI_API_URL}/ai/results/${resultId}/interpret`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } catch (error) {
+    throw new Error(`AI assistant unreachable: ${error instanceof Error ? error.message : "fetch failed"}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(formatHttpError(`/ai/results/${resultId}/interpret`, response.status, response.statusText, detail));
+  }
+  return response.json() as Promise<IncidentInterpretResult>;
+}
+
+function isAnomalyResult(result: AiResult): boolean {
+  return result.detected_anomaly_type !== "NORMAL" && Number(result.risk_score || 0) > 0;
 }

@@ -79,7 +79,7 @@ export function IncidentDetailClient({ id }: { id: string }) {
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           {model && <span className="modelDetectionBadge rules"><span>{model.name}</span><small>{model.family}</small></span>}
-          <SeverityBadge severity={incident.severity} />
+          <SeverityBadge anomalyType={incident.detected_anomaly_type} severity={incident.severity} />
           <Link className="button" href="/alerts">
             Retour
           </Link>

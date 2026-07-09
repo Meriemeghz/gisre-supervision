@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { AiResult } from "@/lib/api";
+import { getAnomalyVisualLevel } from "@/lib/anomaly-visual";
 import { SeverityBadge } from "./SeverityBadge";
 
 export type IncidentStatus = "OPEN" | "INVESTIGATING" | "RESOLVED" | "CLOSED";
@@ -32,6 +33,12 @@ export function IncidentTable({
   compact?: boolean;
   flowNames?: Map<string, string>;
 }) {
+  const anomalyResults = results.filter((item) => item.detected_anomaly_type !== "NORMAL" && Number(item.risk_score || 0) > 0);
+
+  if (anomalyResults.length === 0) {
+    return <p className="muted">Aucune anomalie detectee pour cette vue.</p>;
+  }
+
   return (
     <table className="table">
       <thead>
@@ -47,8 +54,8 @@ export function IncidentTable({
         </tr>
       </thead>
       <tbody>
-        {results.map((item) => (
-          <tr key={item.id}>
+        {anomalyResults.map((item) => (
+          <tr className={`anomalyVisualRow ${getAnomalyVisualLevel(item.detected_anomaly_type, item.severity)}`} key={item.id}>
             <td className="typeCell">{item.detected_anomaly_type}</td>
             <td>
               <strong>{getFlowLabel(item.flow_code, flowNames)}</strong>
@@ -61,7 +68,7 @@ export function IncidentTable({
               <span className={`incidentStatus ${getIncidentStatus(item).toLowerCase()}`}>{getIncidentStatus(item)}</span>
             </td>
             <td>
-              <SeverityBadge severity={item.severity} />
+              <SeverityBadge anomalyType={item.detected_anomaly_type} severity={item.severity} />
             </td>
             <td className="score">{item.risk_score}</td>
             {!compact && <td>{item.recommendation || item.explanation || "A confirmer"}</td>}

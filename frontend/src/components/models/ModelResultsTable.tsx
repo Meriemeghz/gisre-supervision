@@ -2,7 +2,9 @@ import type { AiModelResult } from "@/types/ai-models";
 import { SeverityBadge } from "@/components/SeverityBadge";
 
 export function ModelResultsTable({ results }: { results: AiModelResult[] }) {
-  if (results.length === 0) {
+  const anomalyResults = results.filter((item) => item.result === "anomaly" && item.anomaly_type !== "NORMAL");
+
+  if (anomalyResults.length === 0) {
     return <p className="muted">Aucun resultat recent pour ce modele.</p>;
   }
 
@@ -22,13 +24,13 @@ export function ModelResultsTable({ results }: { results: AiModelResult[] }) {
           </tr>
         </thead>
         <tbody>
-          {results.map((item) => (
+          {anomalyResults.map((item) => (
             <tr key={item.id}>
               <td>{item.date}</td>
               <td>{item.flow_or_api}</td>
               <td className="typeCell">{item.anomaly_type}</td>
               <td className="score">{item.risk_score}</td>
-              <td><SeverityBadge severity={item.severity} /></td>
+              <td><SeverityBadge anomalyType={item.anomaly_type} severity={item.severity} /></td>
               <td>{item.confidence === null ? "N/A" : `${Math.round(item.confidence * 100)}%`}</td>
               <td><span className={`eventStatus ${item.result === "anomaly" ? "failed" : "ok"}`}>{item.result}</span></td>
               <td>{item.validation || "N/A"}</td>
