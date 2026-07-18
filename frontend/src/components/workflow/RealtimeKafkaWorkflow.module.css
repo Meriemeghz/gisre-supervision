@@ -609,6 +609,80 @@
   background: #087dca;
 }
 
+.confusionMatrix {
+  overflow: hidden;
+  margin-top: 10px;
+  border: 1px solid #dfe4ec;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.confusionMatrixHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border-bottom: 1px solid #dfe4ec;
+}
+
+.confusionMatrixHeader strong {
+  color: #0f172a;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.confusionMatrixHeader span {
+  color: #526071;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.confusionMatrixGrid {
+  display: grid;
+  overflow-x: auto;
+  align-items: stretch;
+  min-width: 100%;
+}
+
+.confusionMatrixGrid > span,
+.confusionMatrixGrid > b,
+.confusionMatrixRow > b,
+.confusionMatrixRow > span {
+  min-height: 38px;
+  display: grid;
+  place-items: center;
+  padding: 8px;
+  border-right: 1px solid #dfe4ec;
+  border-bottom: 1px solid #dfe4ec;
+  color: #0f172a;
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.confusionMatrixGrid > b,
+.confusionMatrixRow > b {
+  color: #526071;
+  background: #f8fafc;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.confusionMatrixRow {
+  display: contents;
+}
+
+.confusionMatrixRow > span {
+  background: #ffffff;
+}
+
+.confusionMatrixRow > span.matrixDiagonal {
+  color: #035f3b;
+  background: #dcfce7;
+}
+
 .rawMetadata {
   border: 1px solid #dfe4ec;
   border-radius: 7px;

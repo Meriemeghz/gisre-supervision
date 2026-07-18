@@ -4,6 +4,8 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import type { AiResult } from "@/lib/api";
+import { getAiModelMetricsMap } from "@/lib/api/ai-models";
+import type { AiModelMetrics } from "@/types/ai-models";
 import type { AnalysisLevelTrace, AnalysisTrace, RiskFusionMetadata } from "@/types/workflow";
 import {
   buildWorkflowStages,
@@ -46,6 +48,12 @@ type DetailEntry = {
 type DetailSection = {
   title: string;
   entries: DetailEntry[];
+  matrix?: ConfusionMatrixModel;
+};
+
+type ConfusionMatrixModel = {
+  labels: string[];
+  values: number[][];
 };
 
 type FinalNodeStatuses = {
@@ -105,14 +113,29 @@ export function RealtimeKafkaWorkflow({
   );
   const [selectedId, setSelectedId] = useState<NodeId>("event");
   const [selectedTab, setSelectedTab] = useState("Overview");
+  const [modelMetricsById, setModelMetricsById] = useState<Record<string, AiModelMetrics>>({});
 
   useEffect(() => {
     setSelectedId(model.defaultSelected);
     setSelectedTab("Overview");
   }, [model.defaultSelected, result?.id]);
 
+  useEffect(() => {
+    let active = true;
+    getAiModelMetricsMap()
+      .then((metrics) => {
+        if (active) setModelMetricsById(metrics);
+      })
+      .catch(() => {
+        if (active) setModelMetricsById({});
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const selected = model.nodes.find((node) => node.id === selectedId) || model.nodes[0];
-  const details = buildInspectionSections(selected, result);
+  const details = buildInspectionSections(selected, result, modelMetricsById);
 
   const workflow = (
     <div className={`${styles.workflowCard} ${embedded ? styles.embeddedCard : ""}`}>
@@ -292,6 +315,7 @@ function InspectionPanel({
                 <DetailCard key={`${activeSection.title}-${detail.label}`} detail={detail} />
               ))}
             </div>
+            {activeSection.matrix && <ConfusionMatrix matrix={activeSection.matrix} />}
           </section>
         ) : (
           <p>No details available for this stage.</p>
@@ -397,11 +421,19 @@ function mapStageStatus(status: WorkflowStage["status"]): WorkflowStatus {
   return "unavailable";
 }
 
-function buildInspectionSections(selected: WorkflowNodeModel, result: AiResult | null): DetailSection[] {
+function buildInspectionSections(
+  selected: WorkflowNodeModel,
+  result: AiResult | null,
+  modelMetricsById: Record<string, AiModelMetrics>,
+): DetailSection[] {
   const stage = selected.stage;
   const details = stage?.details || [];
   const metrics = stage?.metrics || {};
   const detail = (label: string) => details.find((entry) => entry.label === label)?.value || "N/A";
+  const modelId = cleanString(selected.raw?.selected_model_id) || detail("Selected model");
+  const modelMetrics = modelId && modelId !== "N/A" ? modelMetricsById[modelId] : undefined;
+  const modelMetricEntries = buildModelMetricEntries(modelMetrics);
+  const confusionMatrix = buildConfusionMatrix(modelMetrics);
   const selectedDetails = (labels: string[]) =>
     details
       .filter((entry) => labels.includes(entry.label))
@@ -468,10 +500,15 @@ function buildInspectionSections(selected: WorkflowNodeModel, result: AiResult |
       title: "Metrics",
       entries: [
         ...Object.entries(metrics).map(([key, value]) => ({ label: humanize(key), value: formatValue(value) })),
+        ...modelMetricEntries,
+        ...(modelMetricEntries.length === 0
+          ? [{ label: "Model metrics", value: modelId && modelId !== "N/A" ? "Unavailable for this model" : "No selected model" }]
+          : []),
         ...details
           .filter((entry) => /count|average|risk$/i.test(entry.label))
           .map((entry) => ({ label: entry.label, value: entry.value })),
       ],
+      matrix: confusionMatrix,
     },
     {
       title: "Explanation",
@@ -635,6 +672,136 @@ function clampNumber(value: number, min: number, max: number) {
 
 function humanize(value: string) {
   return value.replaceAll("_", " ");
+}
+
+function buildModelMetricEntries(metrics: AiModelMetrics | undefined): DetailEntry[] {
+  if (!metrics) return [];
+  const keys = selectModelMetricKeys(metrics);
+  return keys
+    .filter((key) => metrics[key as keyof AiModelMetrics] !== undefined && metrics[key as keyof AiModelMetrics] !== null)
+    .map((key) => ({
+      label: humanize(key),
+      value: formatModelMetric(key, metrics[key as keyof AiModelMetrics]),
+    }));
+}
+
+function selectModelMetricKeys(metrics: AiModelMetrics) {
+  if (
+    Array.isArray(metrics.confusion_matrix)
+    || metrics.accuracy !== undefined
+    || metrics.precision !== undefined
+    || metrics.recall !== undefined
+    || metrics.f1_score !== undefined
+  ) {
+    return [
+      "accuracy",
+      "precision",
+      "recall",
+      "f1_score",
+      "auc",
+      "false_positive_rate",
+      "false_negative_rate",
+      "labelled_eval_count",
+      "sample_count",
+    ];
+  }
+  if (metrics.silhouette_score !== undefined || metrics.anomaly_rate !== undefined || metrics.contamination_rate !== undefined) {
+    return [
+      "silhouette_score",
+      "anomaly_rate",
+      "contamination_rate",
+      "n_neighbors",
+      "sample_count",
+      "avg_confidence",
+      "avg_inference_ms",
+    ];
+  }
+  if (metrics.loss !== undefined || metrics.reconstruction_error !== undefined) {
+    return [
+      "loss",
+      "validation_loss",
+      "reconstruction_error",
+      "detection_threshold",
+      "avg_confidence",
+      "avg_inference_ms",
+    ];
+  }
+  if (metrics.model_family === "deterministic_rules" || metrics.active_rule_count !== undefined) {
+    return [
+      "active_rule_count",
+      "triggered_rule_count",
+      "rule_coverage",
+      "validation_match_rate",
+      "scoring_coverage",
+      "recommendation_coverage",
+      "avg_risk_score",
+      "avg_inference_ms",
+    ];
+  }
+  return ["avg_confidence", "avg_inference_ms", "sample_count", "total_anomalies", "avg_risk_score"];
+}
+
+function buildConfusionMatrix(metrics: AiModelMetrics | undefined): ConfusionMatrixModel | undefined {
+  const matrix = metrics?.confusion_matrix;
+  if (!Array.isArray(matrix) || matrix.length === 0) return undefined;
+  const values = matrix.map((row) => Array.isArray(row) ? row.map(Number) : []);
+  const size = values.length;
+  if (values.some((row) => row.length !== size || row.some((cell) => !Number.isFinite(cell)))) return undefined;
+  const labels = values.map((_, index) => metrics?.confusion_labels?.[index] || fallbackMatrixLabel(index, size));
+  return { labels, values };
+}
+
+function fallbackMatrixLabel(index: number, size: number) {
+  if (size === 2) return index === 0 ? "normal" : "anomaly";
+  return ["normal", "anomaly", "critical"][index] || `class ${index + 1}`;
+}
+
+function formatModelMetric(key: string, value: unknown) {
+  if (value === null || value === undefined || value === "") return "N/A";
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return String(value);
+  if (key.includes("ms")) return `${Math.round(numeric)} ms`;
+  if (key === "silhouette_score") return numeric.toFixed(3);
+  if (
+    key.includes("rate")
+    || key.includes("coverage")
+    || ["accuracy", "precision", "recall", "f1_score", "auc", "avg_confidence"].includes(key)
+  ) {
+    return `${Math.round(numeric * 100)}%`;
+  }
+  if (Number.isInteger(numeric)) return String(numeric);
+  return numeric.toFixed(3);
+}
+
+function ConfusionMatrix({ matrix }: { matrix: ConfusionMatrixModel }) {
+  return (
+    <div className={styles.confusionMatrix}>
+      <div className={styles.confusionMatrixHeader}>
+        <strong>Matrice de confusion</strong>
+        <span>Reel x Pred</span>
+      </div>
+      <div
+        className={styles.confusionMatrixGrid}
+        style={{ gridTemplateColumns: `88px repeat(${matrix.labels.length}, minmax(48px, 1fr))` }}
+      >
+        <span />
+        {matrix.labels.map((label) => <b key={`pred-${label}`}>Pred {label}</b>)}
+        {matrix.values.map((row, rowIndex) => (
+          <div className={styles.confusionMatrixRow} key={`row-${matrix.labels[rowIndex]}`}>
+            <b>Reel {matrix.labels[rowIndex]}</b>
+            {row.map((value, columnIndex) => (
+              <span
+                className={rowIndex === columnIndex ? styles.matrixDiagonal : ""}
+                key={`${rowIndex}-${columnIndex}`}
+              >
+                {value}
+              </span>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function DetailCard({ detail }: { detail: DetailEntry }) {

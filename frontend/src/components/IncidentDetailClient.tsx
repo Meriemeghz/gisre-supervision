@@ -48,7 +48,7 @@ export function IncidentDetailClient({ id }: { id: string }) {
             <h1>Detail incident</h1>
             <p>Analyse IA et contexte technique.</p>
           </div>
-          <Link className="button" href="/alerts">
+          <Link className="button" href="/investigations">
             Retour
           </Link>
         </div>
@@ -80,7 +80,7 @@ export function IncidentDetailClient({ id }: { id: string }) {
         <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
           {model && <span className="modelDetectionBadge rules"><span>{model.name}</span><small>{model.family}</small></span>}
           <SeverityBadge anomalyType={incident.detected_anomaly_type} severity={incident.severity} />
-          <Link className="button" href="/alerts">
+          <Link className="button" href="/investigations">
             Retour
           </Link>
         </div>

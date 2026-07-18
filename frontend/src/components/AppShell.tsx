@@ -6,10 +6,7 @@ import type { ReactNode } from "react";
 
 const navItems = [
   { href: "/", label: "Dashboard", detail: "Temps reel" },
-  { href: "/alerts", label: "Alertes IA", detail: "Incidents" },
   { href: "/investigations", label: "Investigations", detail: "Validation IA" },
-  { href: "/events", label: "Evenements", detail: "Kafka live" },
-  { href: "/workflow", label: "Workflow", detail: "Pipeline IA" },
   { href: "/models", label: "Modeles IA", detail: "Lifecycle" },
   { href: "/analyze", label: "Analyse", detail: "Historique" },
 ];
